@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -30,7 +31,8 @@ class SupervisorTests(unittest.TestCase):
         self.addCleanup(self.network.stop)
         spec = importlib.util.spec_from_file_location("supervisor_under_test", SOURCE)
         self.module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.module)
+        with patch.object(sys, "path", [str(SOURCE.parent), *sys.path]):
+            spec.loader.exec_module(self.module)
 
     def response(self, payload):
         self.urlopen.side_effect = None

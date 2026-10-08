@@ -6,6 +6,7 @@ import os
 import signal
 import time
 import urllib.request
+from diagnostics import diagnostics_once
 from pathlib import Path
 
 REPO = os.environ.get("SUPERVISOR_REPO", "BlueDev180/openclaw-dev")
@@ -60,6 +61,7 @@ def main():
         try:
             tasks = poll()
             acknowledge_once(tasks)
+            diagnostics_once(REPO, STATE_DIR)
             snapshot = {"repo": REPO, "checked_at": int(time.time()), "issues": tasks}
             temp = STATE_DIR / "status.json.tmp"
             temp.write_text(json.dumps(snapshot, indent=2) + "\n", encoding="utf-8")

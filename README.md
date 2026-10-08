@@ -26,6 +26,6 @@ Do not configure a main push webhook or workflow to deploy automatically. No exi
 
 Never publish tokens, SSH keys, environment files, private trading data, or runtime state. Ignore patterns reduce accidental additions but do not detect every secret: inspect the staged diff before each push. Tests use only a synthetic token in a temporary directory.
 
-This change does not alter Supervisor source or its service file. Tests mock HTTP requests; they never start a live service or contact a VPS, OpenClaw, or trading service. The existing Supervisor can post a one-time authenticated GitHub acknowledgement; tests cover that behavior without sending a comment.
+PR #3 adds an opt-in private operations channel; source and service-template edits are repository-only. Tests mock HTTP requests; they never start a live service or contact a VPS, OpenClaw, or trading service. The existing Supervisor can post a one-time authenticated GitHub acknowledgement; tests cover that behavior without sending a comment.
 
-The older installation commands in supervisor/README.md are historical documentation, not authorization to execute them. Any future production action requires separate explicit approval.
+See supervisor/README.md for the private request protocol, manual least-privilege configuration, deployment plan and rollback. Those plans require separate explicit approval before any production access. Diagnostic reports must never be posted to this public repository.

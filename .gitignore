@@ -17,3 +17,5 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 diagnostics-v1-issue-*
+operations_token
+operations-diagnostics.sqlite3*

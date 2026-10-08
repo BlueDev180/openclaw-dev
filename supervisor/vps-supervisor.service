@@ -17,6 +17,8 @@ ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
 StateDirectory=vps-supervisor
+StateDirectoryMode=0700
+UMask=0077
 ReadWritePaths=/var/lib/vps-supervisor
 
 [Install]

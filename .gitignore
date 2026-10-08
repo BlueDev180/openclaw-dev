@@ -1,0 +1,18 @@
+# Local credentials and private runtime data must never be published.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials/
+secrets/
+github_token
+status.json
+status.json.tmp
+acknowledged-issue-*
+*.log
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/

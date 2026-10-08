@@ -9,7 +9,7 @@ import urllib.request
 from pathlib import Path
 
 REPO = os.environ.get("SUPERVISOR_REPO", "BlueDev180/openclaw-dev")
-INTERVAL = max(60, int(os.environ.get("SUPERVISOR_POLL_SECONDS", "120")))
+INTERVAL = max(10, int(os.environ.get("SUPERVISOR_POLL_SECONDS", "30")))
 STATE_DIR = Path(os.environ.get("SUPERVISOR_STATE_DIR", "/var/lib/vps-supervisor"))
 STOP = False
 

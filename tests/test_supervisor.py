@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import tempfile
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -17,7 +18,7 @@ class SupervisorTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         environment = {
-            "SUPERVISOR_REPO": "example/test",
+            "SUPERVISOR_REPO": "BlueDev180/openclaw-dev",
             "SUPERVISOR_STATE_DIR": str(self.root),
             "SUPERVISOR_POLL_SECONDS": "1",
         }
@@ -25,12 +26,14 @@ class SupervisorTests(unittest.TestCase):
         self.env.start()
         self.addCleanup(self.env.stop)
         # Fail closed if a test forgets to supply a fake network response.
-        self.network = patch("urllib.request.urlopen", side_effect=AssertionError("Network forbidden"))
-        self.urlopen = self.network.start()
+        self.network = patch("urllib.request.build_opener")
+        self.urlopen = self.network.start().return_value.open
+        self.urlopen.side_effect = AssertionError('Network forbidden')
         self.addCleanup(self.network.stop)
         spec = importlib.util.spec_from_file_location("supervisor_under_test", SOURCE)
         self.module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(self.module)
+        with patch.object(sys, "path", [str(SOURCE.parent), *sys.path]):
+            spec.loader.exec_module(self.module)
 
     def response(self, payload):
         self.urlopen.side_effect = None
@@ -57,7 +60,7 @@ class SupervisorTests(unittest.TestCase):
             {"number": 2, "title": title, "url": "https://example.test/2"}
         ])
         request = self.urlopen.call_args.args[0]
-        self.assertEqual(request.full_url, "https://api.github.com/repos/example/test/issues?state=open&per_page=30")
+        self.assertEqual(request.full_url, "https://api.github.com/repos/BlueDev180/openclaw-dev/issues?state=open&per_page=30")
         self.assertEqual(request.get_method(), "GET")
         self.assertIsNone(request.get_header("Authorization"))
         self.assertEqual(self.urlopen.call_args.kwargs, {"timeout": 15})
@@ -83,7 +86,7 @@ class SupervisorTests(unittest.TestCase):
         self.module.acknowledge_once(tasks)
         request = self.urlopen.call_args.args[0]
         self.assertEqual(request.get_method(), "POST")
-        self.assertEqual(request.full_url, "https://api.github.com/repos/example/test/issues/1/comments")
+        self.assertEqual(request.full_url, "https://api.github.com/repos/BlueDev180/openclaw-dev/issues/1/comments")
         self.assertEqual(json.loads(request.data), {
             "body": "VPS Supervisor authenticated reply test successful. No tasks executed."
         })
@@ -97,6 +100,40 @@ class SupervisorTests(unittest.TestCase):
         with self.assertRaises(OSError):
             self.module.acknowledge_once([{"number": 1, "title": "Supervisor connection test"}])
         self.assertFalse((self.root / "acknowledged-issue-1").exists())
+
+    def test_operations_credential_is_never_used_by_public_observer(self):
+        directory = self.root / "credentials"
+        directory.mkdir()
+        (directory / "operations_token").write_text("synthetic_private_token")
+        os.environ["CREDENTIALS_DIRECTORY"] = str(directory)
+        os.environ["SUPERVISOR_REPO"] = "BlueDev180/vps-operations"
+        self.response([])
+        self.module.poll()
+        request = self.urlopen.call_args.args[0]
+        self.assertIn("/repos/BlueDev180/openclaw-dev/", request.full_url)
+        self.assertIsNone(request.get_header("Authorization"))
+
+    def test_private_results_never_enter_public_status_snapshot(self):
+        with patch.object(self.module.signal, "signal"), \
+             patch.object(self.module, "poll", return_value=[]), \
+             patch.object(self.module, "acknowledge_once"), \
+             patch.object(self.module, "diagnostics_once", return_value="synthetic_private_report") as diagnostics, \
+             patch.object(self.module.time, "sleep", side_effect=lambda _: self.module.stop(None, None)):
+            self.module.main()
+        diagnostics.assert_called_once_with(self.root)
+        status = (self.root / "status.json").read_text()
+        self.assertNotIn("synthetic_private_report", status)
+        self.assertEqual(json.loads(status)["issues"], [])
+
+    def test_public_poll_failure_does_not_block_private_poll(self):
+        with patch.object(self.module.signal, "signal"), \
+             patch.object(self.module, "poll", side_effect=OSError("synthetic_secret")), \
+             patch.object(self.module, "diagnostics_once") as diagnostics, \
+             patch.object(self.module.time, "sleep", side_effect=lambda _: self.module.stop(None, None)), \
+             self.assertLogs(level="WARNING") as logs:
+            self.module.main()
+        diagnostics.assert_called_once_with(self.root)
+        self.assertNotIn("synthetic_secret", " ".join(logs.output))
 
     def test_stop_sets_shutdown_flag(self):
         self.module.stop(None, None)

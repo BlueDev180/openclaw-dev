@@ -6,9 +6,10 @@ import os
 import signal
 import time
 import urllib.request
+from diagnostics import diagnostics_once, NoRedirect
 from pathlib import Path
 
-REPO = os.environ.get("SUPERVISOR_REPO", "BlueDev180/openclaw-dev")
+REPO = "BlueDev180/openclaw-dev"  # Public observer cannot target operations repositories.
 INTERVAL = max(10, int(os.environ.get("SUPERVISOR_POLL_SECONDS", "30")))
 STATE_DIR = Path(os.environ.get("SUPERVISOR_STATE_DIR", "/var/lib/vps-supervisor"))
 STOP = False
@@ -26,7 +27,7 @@ def poll():
     if token:
         headers["Authorization"] = "Bearer " + token
     req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as resp:
+    with urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect).open(req, timeout=15) as resp:
         issues = json.load(resp)
     tasks = [{"number": i["number"], "title": i["title"], "url": i["html_url"]}
              for i in issues if "pull_request" not in i]
@@ -47,7 +48,7 @@ def acknowledge_once(tasks):
     req = urllib.request.Request("https://api.github.com/repos/" + REPO + "/issues/1/comments", data=data,
         headers={"Accept": "application/vnd.github+json", "Authorization": "Bearer " + token,
                  "Content-Type": "application/json", "User-Agent": "vps-supervisor/0.2"}, method="POST")
-    with urllib.request.urlopen(req, timeout=15):
+    with urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect).open(req, timeout=15):
         pass
     marker.write_text("ok\\n", encoding="utf-8")
 
@@ -67,6 +68,7 @@ def main():
             logging.info("GitHub reachable; observed %d open issues (read-only)", len(tasks))
         except Exception as exc:
             logging.warning("GitHub polling failed: %s", type(exc).__name__)
+        diagnostics_once(STATE_DIR)
         for _ in range(INTERVAL):
             if STOP:
                 break

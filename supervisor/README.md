@@ -6,6 +6,10 @@ and review source in the public `BlueDev180/openclaw-dev` repository. The
 Supervisor performs only the fixed, read-only diagnostics described below.
 Development and CI use synthetic data and never contact the VPS.
 
+## Supported runtime
+
+The Supervisor and diagnostics code support Python 3.10, 3.11, 3.12 and 3.13, validated by all 43 offline tests in each CI lane. CI selects an available maintenance release (CPython 3.10.22 for the initial 3.10 run), rather than certifying a specific vendor build or live host. Diagnostics still requires Linux for its fixed proc interfaces. Runtime support does not authorize production access or deployment.
+
 ## Private repository setup (manual, no repository created by this PR)
 
 The GitHub connection returned 404 for `BlueDev180/vps-operations` during this
@@ -150,7 +154,7 @@ storage; untrusted local writers must not control state or credentials.
 
 ## Deployment plan (documentation only; separate explicit approval required)
 
-1. Review PR #3 and all Python 3.11/3.12/3.13 checks. Obtain the owner's explicit
+1. Review the source PR and all Python 3.10/3.11/3.12/3.13 checks. Obtain the owner's explicit
    approval before merging that specific PR. Passing CI is not approval.
 2. Prepare the private repository, channel issue, scoped PAT and verified numeric
    IDs manually. Confirm repository access/visibility and keep sensitive values

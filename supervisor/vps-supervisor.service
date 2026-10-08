@@ -1,0 +1,23 @@
+[Unit]
+Description=VPS Supervisor (GitHub read-only observer)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=vps-supervisor
+Group=vps-supervisor
+Environment=SUPERVISOR_REPO=BlueDev180/openclaw-dev
+Environment=SUPERVISOR_STATE_DIR=/var/lib/vps-supervisor
+ExecStart=/usr/bin/python3 /opt/vps-supervisor/supervisor.py
+Restart=always
+RestartSec=15
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+StateDirectory=vps-supervisor
+ReadWritePaths=/var/lib/vps-supervisor
+
+[Install]
+WantedBy=multi-user.target

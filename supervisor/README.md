@@ -205,3 +205,13 @@ GitHub repository can override that administrator-controlled visibility risk.
 Metrics are host aggregates; root disk excludes other mounts, CPU utilization is
 a brief sample, and mandatory interfaces require Linux. No live environment was
 verified and no GPT/model runtime is required by this diagnostic implementation.
+
+
+## Separate agent management (disabled)
+
+The standalone agent management worker uses a separate identity, signed owner approvals,
+explicit instruction-file policy and private GitHub artifacts. It does not modify this
+Supervisor's diagnostics behavior. See [architecture, limits, configuration, deployment
+and rollback](../docs/agent-management.md). Native registration and WhatsApp activation
+remain proposals pending verified production layout and separate approval.
+

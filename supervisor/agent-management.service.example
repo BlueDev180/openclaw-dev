@@ -1,0 +1,25 @@
+[Unit]
+Description=Approved agent file management (disabled until separately authorized)
+
+[Service]
+Type=oneshot
+User=openclaw-agent-manager
+Group=openclaw-agent-manager
+Environment=SUPERVISOR_AGENT_MANAGEMENT_ENABLED=0
+ExecStart=/usr/bin/python3 /opt/openclaw-agent-manager/agent_management_worker.py
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictSUIDSGID=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+StateDirectory=openclaw-agent-manager
+StateDirectoryMode=0700
+UMask=0077
+# A reviewed drop-in must map only exact approved instruction directories,
+# the root-owned policy/projection and dedicated systemd credentials.
+# No Docker socket/group, auth directories, auto-start section or timer.

@@ -1,0 +1,37 @@
+[Unit]
+Description=Approved agent file management (disabled until separately authorized)
+
+[Service]
+Type=oneshot
+TimeoutStartSec=15min
+User=openclaw-agent-manager
+Group=openclaw-agent-manager
+Environment=SUPERVISOR_AGENT_MANAGEMENT_ENABLED=0
+ExecStart=/usr/bin/python3 /opt/openclaw-agent-manager/agent_management_worker.py
+NoNewPrivileges=true
+CapabilityBoundingSet=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+RestrictSUIDSGID=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectKernelLogs=true
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+# Read-only filesystem sandboxing does not deny reads. A deployment MUST add
+# the reviewed allowlist mount namespace described in docs/agent-management.md.
+# ProtectHome hides home workspaces; do not disable it to expose unrelated data.
+StateDirectory=openclaw-agent-manager
+StateDirectoryMode=0700
+UMask=0077
+# A reviewed drop-in must map only exact approved instruction directories,
+# the root-owned policy/projection and dedicated systemd credentials.
+# No Docker socket/group, auth directories, auto-start section or timer.

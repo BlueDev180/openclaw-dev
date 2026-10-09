@@ -6,10 +6,11 @@ import logging
 import os
 from pathlib import Path
 import re
+import stat
 import time
 import urllib.request
 
-from agent_management import Manager, canonical, digest, load_policy, UUID
+from agent_management import Manager, canonical, digest, load_policy, UUID, strict_json, parent_directory, read_at
 from diagnostics import NoRedirect, trusted, AUTHOR_ID, REPOSITORY
 
 API = "https://api.github.com/repos/" + REPOSITORY
@@ -41,7 +42,30 @@ def github(method, path, token, payload=None):
         raw = response.read(MAX_RESPONSE + 1)
         if len(raw) > MAX_RESPONSE:
             raise ValueError("Response limit")
-        return json.loads(raw)
+        return strict_json(raw)
+
+
+def read_credential(directory, name):
+    with parent_directory(directory, name) as (parent, filename):
+        raw, metadata = read_at(parent, filename)
+    if metadata.st_uid not in {0, os.getuid()} or stat.S_IMODE(metadata.st_mode) & 0o077 or len(raw) > 513:
+        raise ValueError("Unsafe credential")
+    return raw.decode("ascii").strip()
+
+
+def report_body(request, marker):
+    return marker + "\nApproved agent request completed. Result: agent-snapshots/" + request + ".json"
+
+
+def acknowledged(token, observed, reporter, marker, body):
+    for value in observed:
+        if (report_matches(value, reporter, marker) and value["body"] == body
+                and type(value.get("id")) is int and value["id"] > 0):
+            fresh = github("GET", f"/issues/comments/{value['id']}", token)
+            if (fresh.get("id") == value["id"] and report_matches(fresh, reporter, marker)
+                    and fresh["body"] == body):
+                return True
+    return False
 
 
 def private(token, repo_id):
@@ -114,10 +138,9 @@ def run_once(manager, token, issue, reporter):
         raise ValueError("Reporter identity failed")
     channel(token, issue)
     observed = comments(token, issue)
-    manager.db.execute("CREATE TABLE IF NOT EXISTS outbox(request TEXT PRIMARY KEY, hash TEXT, state TEXT)")
-    manager.db.commit()
     handled = 0
-    for item in observed:
+    # Recent approved work must not starve behind old held reservations.
+    for item in reversed(observed):
         # Ignore ordinary discussion without parsing it as instructions.
         if type(item) is not dict or type(item.get("body")) is not str or not item["body"].startswith("supervisor:agent-management:v1 "):
             continue
@@ -135,7 +158,7 @@ def run_once(manager, token, issue, reporter):
                 raise ValueError("Commit mismatch")
             blob = github("GET", f"/contents/agent-requests/{claim['request']}.json?ref={claim['commit']}", token)
             raw = decode_content(blob, 65536)
-            manifest = json.loads(raw)
+            manifest = strict_json(raw)
             if raw != canonical(manifest):
                 raise ValueError("Canonical manifest required")
             manager.verify(manifest, approval, time.time())
@@ -147,6 +170,7 @@ def run_once(manager, token, issue, reporter):
             response = manager.execute(manifest, approval)
             if response["state"] != "applied":
                 continue
+            manager.publication_safe(manifest, response)
             artifact = canonical({"version": 1, "request_commit": claim["commit"],
                                   "policy_sha256": claim["policy"], "response": response})
             if len(artifact) > MAX_ARTIFACT:
@@ -154,27 +178,43 @@ def run_once(manager, token, issue, reporter):
             artifact_hash = digest(artifact)
             marker = f"<!-- supervisor-agent-management:v1 request={claim['request']} result={artifact_hash} -->"
             path = f"/contents/agent-snapshots/{claim['request']}.json"
+            body = report_body(claim["request"], marker)
             with manager.lock():
-                existing = manager.db.execute("SELECT hash,state FROM outbox WHERE request=?", (claim["request"],)).fetchone()
+                manager.verify(manifest, approval, time.time())
+                manager.publication_safe(manifest, response)
+                existing = manager.db.execute("SELECT hash,state,attempted FROM outbox WHERE request=?", (claim["request"],)).fetchone()
                 if existing:
                     if existing[0] != artifact_hash:
                         raise ValueError("Artifact changed")
-                    if existing[1] == "reserved":
-                        remote = decode_content(github("GET", path, token), MAX_ARTIFACT)
-                        if digest(remote) == artifact_hash and any(report_matches(c, reporter, marker) for c in observed):
+                    if existing[1] == "posted":
+                        continue
+                    private(token, manager.repo_id)
+                    remote = decode_content(github("GET", path, token), MAX_ARTIFACT)
+                    if remote != artifact:
+                        raise ValueError("Reserved artifact mismatch")
+                    if existing[2]:
+                        if acknowledged(token, observed, reporter, marker, body):
                             with manager.db:
                                 manager.db.execute("UPDATE outbox SET state='posted' WHERE request=?", (claim["request"],))
-                    continue
-                with manager.db:
-                    manager.db.execute("INSERT INTO outbox VALUES(?,?,'reserved')", (claim["request"], artifact_hash))
-                private(token, manager.repo_id)
-                result = github("PUT", path, token, {"message": "Store approved agent management result", "content": base64.b64encode(artifact).decode("ascii")})
-                expected_git = hashlib.sha1(b"blob " + str(len(artifact)).encode() + b"\0" + artifact).hexdigest()
-                if type(result) is not dict or type(result.get("content")) is not dict or result["content"].get("sha") != expected_git:
-                    raise ValueError("Ambiguous artifact write")
+                        continue
+                else:
+                    with manager.db:
+                        manager.db.execute("INSERT INTO outbox(request,hash,state,attempted) VALUES(?,?,'reserved',0)", (claim["request"], artifact_hash))
+                    private(token, manager.repo_id)
+                    manager.verify(manifest, approval, time.time())
+                    manager.publication_safe(manifest, response)
+                    result = github("PUT", path, token, {"message": "Store approved agent management result", "content": base64.b64encode(artifact).decode("ascii")})
+                    expected_git = hashlib.sha1(b"blob " + str(len(artifact)).encode() + b"\0" + artifact).hexdigest()
+                    if type(result) is not dict or type(result.get("content")) is not dict or result["content"].get("sha") != expected_git:
+                        raise ValueError("Ambiguous artifact write")
                 private(token, manager.repo_id)
                 channel(token, issue)
-                body = marker + "\nApproved agent request completed. Result: agent-snapshots/" + claim["request"] + ".json"
+                manager.verify(manifest, approval, time.time())
+                manager.publication_safe(manifest, response)
+                # Reserve the attempt durably BEFORE POST. Never repeat a POST
+                # whose acceptance might be unknown, including a process crash.
+                with manager.db:
+                    manager.db.execute("UPDATE outbox SET attempted=1 WHERE request=?", (claim["request"],))
                 posted = github("POST", f"/issues/{issue}/comments", token, {"body": body})
                 if not report_matches(posted, reporter, marker) or posted["body"] != body:
                     raise ValueError("Ambiguous report")
@@ -196,16 +236,15 @@ def poll_once():
                 raise ValueError("Configuration required")
             values.append(int(value))
         credentials = Path(os.environ["CREDENTIALS_DIRECTORY"])
-        with (credentials / "agent_management_token").open(encoding="ascii") as source:
-            token = source.read(513).strip()
+        token = read_credential(credentials, "agent_management_token")
         if not re.fullmatch(r"[A-Za-z0-9_]{1,512}", token):
             raise ValueError("Invalid token")
-        with (credentials / "agent_approval_key").open(encoding="ascii") as source:
-            key = source.read(66).strip()
+        key = read_credential(credentials, "agent_approval_key")
         if not re.fullmatch(r"[0-9a-f]{64}", key):
             raise ValueError("Invalid approval key")
         policy = load_policy(os.environ["SUPERVISOR_AGENT_POLICY"])
-        manager = Manager(policy, os.environ["SUPERVISOR_AGENT_STATE_DIR"], bytes.fromhex(key), values[0], AUTHOR_ID)
+        manager = Manager(policy, os.environ["SUPERVISOR_AGENT_STATE_DIR"], bytes.fromhex(key), values[0], AUTHOR_ID,
+                          policy_path=os.environ["SUPERVISOR_AGENT_POLICY"])
         run_once(manager, token, values[1], values[2])
     except Exception:
         logging.warning("Agent management poll disabled or deferred; check private configuration")

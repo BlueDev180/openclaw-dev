@@ -8,7 +8,7 @@ import stat
 import sys
 import time
 
-from agent_management import canonical, digest, exact, signature, UUID, HEX
+from agent_management import canonical, digest, exact, signature, UUID, HEX, strict_json, no_acl, parent_directory
 
 
 def approval_line(claim, manifest, key, now=None):
@@ -32,9 +32,12 @@ def approval_line(claim, manifest, key, now=None):
 def read_key(path):
     if os.name != "posix":
         raise ValueError("Private Linux owner key required")
-    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    path = Path(os.path.abspath(path))
+    with parent_directory(path.parent, path.name) as (parent, name):
+        descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
     try:
         meta = os.fstat(descriptor)
+        no_acl(descriptor)
         if not stat.S_ISREG(meta.st_mode) or meta.st_uid != os.getuid() or meta.st_nlink != 1 or meta.st_mode & 0o077:
             raise ValueError("Key must be a private owner file")
         raw = os.read(descriptor, 67).decode("ascii").strip()
@@ -58,7 +61,7 @@ def main():
                 raw = source.read(65537)
             if len(raw) > 65536:
                 raise ValueError("Input limit")
-            values.append(json.loads(raw))
+            values.append(strict_json(raw))
         print(approval_line(values[0], values[1], read_key(args.key_file)))
     except Exception:
         print("Approval refused; inspect private inputs locally", file=sys.stderr)

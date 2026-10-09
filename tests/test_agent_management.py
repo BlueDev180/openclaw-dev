@@ -367,8 +367,7 @@ class AgentManagementTests(Fixture, unittest.TestCase):
             am.Manager(self.policy, alias, KEY, 9001, 101)
 
 
-@unittest.skipUnless(os.name == "posix", "Linux directory capabilities required")
-class WorkerTests(Fixture, unittest.TestCase):
+class WorkerFixture(Fixture):
     def setUp(self):
         super().setUp()
         self.owner = {"id": 101, "login": "BlueDev180", "type": "User"}
@@ -404,6 +403,8 @@ class WorkerTests(Fixture, unittest.TestCase):
             return [self.comment] + ([self.report] if self.report else [])
         if path == "/issues/comments/301":
             return self.comment
+        if path == "/issues/comments/401":
+            return self.report
         if path.startswith("/git/commits/"):
             return {"sha": "a" * 40}
         if path.startswith("/contents/agent-requests/"):
@@ -425,6 +426,9 @@ class WorkerTests(Fixture, unittest.TestCase):
         with patch.object(worker, "github", side_effect=fake or self.fake):
             worker.run_once(self.manager, "synthetic_token", 42, 202)
 
+
+@unittest.skipUnless(os.name == "posix", "Linux directory capabilities required")
+class WorkerTests(WorkerFixture, unittest.TestCase):
     def test_private_request_applied_and_published_exactly_once(self):
         self.run_worker()
         self.run_worker()
@@ -567,7 +571,7 @@ class TransportTests(unittest.TestCase):
                 worker.github(method, path, token)
 
     def test_blob_type_and_integrity_are_verified(self):
-        value = WorkerTests.content(b"synthetic")
+        value = WorkerFixture.content(b"synthetic")
         self.assertEqual(worker.decode_content(value, 100), b"synthetic")
         for mutation in ({"type": "symlink"}, {"sha": "0" * 40}, {"encoding": "utf8"}, {"content": "!!!"}):
             with self.assertRaises(ValueError):

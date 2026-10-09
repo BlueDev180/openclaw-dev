@@ -516,7 +516,12 @@ class Manager:
             temporary = ".agent-manager-" + str(uuid.uuid4())
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent)
             try:
-                with os.fdopen(fd, "wb") as output:
+                try:
+                    output = os.fdopen(fd, "wb")
+                except BaseException:
+                    os.close(fd)
+                    raise
+                with output:
                     output.write(replacement)
                     output.flush()
                     os.fchown(output.fileno(), -1, metadata.st_gid)

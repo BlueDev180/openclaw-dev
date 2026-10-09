@@ -151,6 +151,37 @@ class HardenedFilesystemTests(Fixture, unittest.TestCase):
         self.assertEqual(self.manager.db.execute("SELECT backup FROM jobs").fetchone()[0], self.old)
         self.assertFalse(list(self.workspace.glob(".agent-manager-*")))
 
+    def test_partial_temporary_write_never_replaces_original(self):
+        original = os.fdopen
+        class InterruptedWriter:
+            def __init__(self, fd, mode):
+                self.file = original(fd, mode)
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                self.file.close()
+            def write(self, content):
+                self.file.write(content[:5])
+                self.file.flush()
+                raise OSError("synthetic interrupted write")
+        with patch.object(am.os, "fdopen", side_effect=InterruptedWriter), self.assertRaises(OSError):
+            self.execute(self.manifest())
+        self.assertEqual(self.target.read_bytes(), self.old)
+        self.assertEqual(self.manager.db.execute("SELECT backup FROM jobs").fetchone()[0], self.old)
+        self.assertFalse(list(self.workspace.glob(".agent-manager-*")))
+        self.assertEqual(self.execute(self.manifest())["state"], "held")
+
+    def test_corruption_after_rename_is_held_with_rollback_backup(self):
+        original = os.replace
+        def corrupt(*args, **kwargs):
+            original(*args, **kwargs)
+            self.target.write_bytes(b"Synthetic unexpected contents.\n")
+        manifest = self.manifest()
+        with patch.object(am.os, "replace", side_effect=corrupt), self.assertRaises(ValueError):
+            self.execute(manifest)
+        self.assertEqual(self.execute(manifest)["state"], "held")
+        self.assertEqual(self.manager.db.execute("SELECT backup FROM jobs").fetchone()[0], self.old)
+
     def test_directory_sync_failure_is_recovered_before_acknowledgement(self):
         real_sync = os.fsync
         def fail_directory(fd):

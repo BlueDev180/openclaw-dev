@@ -70,6 +70,23 @@ class HardenedFilesystemTests(Fixture, unittest.TestCase):
         with self.assertRaises(ValueError):
             am.Manager(self.policy, self.state, KEY, 9001, 101)
 
+    def test_legacy_prepared_state_and_reservation_migrate_conservatively(self):
+        other = self.root / "legacy-state"
+        other.mkdir(mode=0o700)
+        database = other / "agent-management.sqlite3"
+        connection = sqlite3.connect(database)
+        connection.executescript("CREATE TABLE jobs (request TEXT PRIMARY KEY, manifest TEXT, policy TEXT, state TEXT, agent TEXT, path TEXT, before_hash TEXT, after_hash TEXT, backup BLOB, result TEXT); CREATE TABLE outbox(request TEXT PRIMARY KEY, hash TEXT, state TEXT);")
+        with connection:
+            connection.execute("INSERT INTO jobs(request,state,backup) VALUES(?,'prepared',?)", (ID1, self.old))
+            connection.execute("INSERT INTO outbox VALUES(?,?,'reserved')", (ID1, "0" * 64))
+        connection.close()
+        database.chmod(0o600)
+        manager = am.Manager(self.policy, other, KEY, 9001, 101)
+        self.addCleanup(manager.close)
+        self.assertEqual(manager.db.execute("SELECT state,backup FROM jobs").fetchone(), ("held", self.old))
+        self.assertEqual(manager.db.execute("SELECT state,attempted FROM outbox").fetchone(), ("reserved", 1))
+        self.assertEqual(manager.db.execute("PRAGMA user_version").fetchone()[0], 2)
+
     def test_raw_configuration_fields_cannot_enter_snapshot(self):
         manifest = self.manifest("snapshot", agent="main", paths=["AGENTS.md"])
         response = self.execute(manifest)
@@ -258,6 +275,55 @@ class HardenedFilesystemTests(Fixture, unittest.TestCase):
 
 @unittest.skipUnless(os.name == "posix", "Linux capability filesystem required")
 class HardenedPublicationTests(WorkerFixture, unittest.TestCase):
+    def test_concurrent_workers_upload_and_comment_once(self):
+        from concurrent.futures import ThreadPoolExecutor
+        import threading
+        barrier = threading.Barrier(2)
+        def concurrent(method, path, token, payload=None):
+            result = self.fake(method, path, token, payload)
+            if path == "/issues/42/comments?per_page=100&page=1":
+                barrier.wait(timeout=5)
+            return result
+        def run(_):
+            manager = am.Manager(self.policy, self.state, KEY, 9001, 101)
+            try:
+                worker.run_once(manager, "synthetic_token", 42, 202)
+            finally:
+                manager.close()
+        with patch.object(worker, "github", side_effect=concurrent), ThreadPoolExecutor(max_workers=2) as pool:
+            list(pool.map(run, range(2)))
+        self.assertEqual(sum(m == "PUT" for m, _ in self.calls), 1)
+        self.assertEqual(sum(m == "POST" for m, _ in self.calls), 1)
+        self.assertEqual(self.manager.db.execute("SELECT count(*) FROM jobs").fetchone()[0], 1)
+
+    def test_new_request_is_not_starved_by_five_old_held_reservations(self):
+        requests = {}
+        comments = []
+        for index in range(1, 7):
+            request = f"{index:08x}-1234-4234-8234-123456789abc"
+            manifest = self.manifest("list", request) if index < 6 else self.manifest(request=request)
+            requests[request] = manifest
+            proof = self.approval(manifest)
+            comments.append({**self.comment, "id": 300 + index, "body": signer.approval_line(proof["claim"], manifest, KEY, now=NOW)})
+            if index < 6:
+                response = self.execute(manifest)
+                artifact = am.canonical({"version": 1, "request_commit": proof["claim"]["commit"], "policy_sha256": proof["claim"]["policy"], "response": response})
+                with self.manager.db:
+                    self.manager.db.execute("INSERT INTO outbox VALUES(?,?,'reserved',1)", (request, am.digest(artifact)))
+        def pending(method, path, token, payload=None):
+            if path == "/issues/42/comments?per_page=100&page=1":
+                return comments
+            if path.startswith("/issues/comments/"):
+                return next(c for c in comments if c["id"] == int(path.rsplit("/", 1)[1]))
+            if path.startswith("/contents/agent-requests/"):
+                request = path.rsplit("/", 1)[1].split(".json")[0]
+                return self.content(am.canonical(requests[request]))
+            return self.fake(method, path, token, payload)
+        with self.assertLogs(level="WARNING"):
+            self.run_worker(pending)
+        self.assertEqual(self.target.read_bytes(), self.manifest()["content"].encode())
+        self.assertEqual(sum(m == "PUT" for m, _ in self.calls), 1)
+
     def test_accepted_upload_lost_response_resumes_comment_but_never_upload(self):
         def lost(method, path, token, payload=None):
             result = self.fake(method, path, token, payload)
